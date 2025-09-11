@@ -46,7 +46,11 @@ export class TransactionController {
       description: depositDto.description || 'Deposit to betting account',
     };
 
-    return this.transactionService.createTransaction(createTransactionDto);
+    // Create the transaction
+    const transaction = await this.transactionService.createTransaction(createTransactionDto);
+    
+    // Immediately process it with Airtel Money
+    return this.transactionService.processDeposit(transaction.transactionId);
   }
 
   @Post('deposit/:transactionId/process')
@@ -60,6 +64,7 @@ export class TransactionController {
   async initiateWithdrawal(
     @Body() withdrawalDto: WithdrawalDto,
   ): Promise<Transaction> {
+    console.log('=== STARTING WITHDRAWAL PROCESS ===');
     const createTransactionDto: CreateTransactionDto = {
       userId: withdrawalDto.userId,
       amount: withdrawalDto.amount,
@@ -69,7 +74,17 @@ export class TransactionController {
         withdrawalDto.description || 'Withdrawal from betting account',
     };
 
-    return this.transactionService.createTransaction(createTransactionDto);
+    // Create the transaction
+    console.log('Creating transaction...');
+    const transaction = await this.transactionService.createTransaction(createTransactionDto);
+    console.log(`Transaction created: ${transaction.transactionId}`);
+    
+    // Immediately process it with Airtel Money
+    console.log('Processing withdrawal with Airtel Money...');
+    const processedTransaction = await this.transactionService.processWithdrawal(transaction.transactionId);
+    console.log('Withdrawal processing completed');
+    
+    return processedTransaction;
   }
 
   @Post('withdrawal/:transactionId/process')

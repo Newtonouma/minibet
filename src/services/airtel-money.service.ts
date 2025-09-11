@@ -19,7 +19,7 @@ export interface DisbursementRequest {
   transaction: {
     amount: number;
     id: string;
-    type: string;
+    type: string; // e.g., B2C
   };
 }
 
@@ -29,7 +29,7 @@ export interface DisbursementResponse {
       reference_id: string;
       airtel_money_id: string;
       id: string;
-      status: string;
+      status: string; // TS (success), TF (failed) or textual statuses
     };
   };
   status: {
@@ -68,6 +68,7 @@ export class AirtelMoneyService {
   ) {}
 
   private async getAccessToken(): Promise<string> {
+    // Use cached token if not expired
     if (
       this.accessToken &&
       this.tokenExpiryTime &&
@@ -79,10 +80,10 @@ export class AirtelMoneyService {
     try {
       const response = await firstValueFrom(
         this.httpService.post<AirtelAuthResponse>(
-          `${this.configService.get('AIRTEL_API_BASE_URL')}/auth/oauth2/token?Content-Type=application%2Fjson&Accept=application%2Fjson`,
+          `${this.configService.get<string>('AIRTEL_API_BASE_URL')}/auth/oauth2/token?Content-Type=application%2Fjson&Accept=application%2Fjson`,
           {
-            client_id: this.configService.get('AIRTEL_CLIENT_ID'),
-            client_secret: this.configService.get('AIRTEL_CLIENT_SECRET'),
+            client_id: this.configService.get<string>('AIRTEL_CLIENT_ID'),
+            client_secret: this.configService.get<string>('AIRTEL_CLIENT_SECRET'),
             grant_type: 'client_credentials',
           },
           {
@@ -102,10 +103,10 @@ export class AirtelMoneyService {
 
       this.logger.log('Successfully obtained Airtel Money access token');
       return this.accessToken;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         'Failed to get access token:',
-        error.response?.data || error.message,
+        JSON.stringify(error?.response?.data ?? error?.message),
       );
       throw new Error('Failed to authenticate with Airtel Money API');
     }
@@ -114,23 +115,27 @@ export class AirtelMoneyService {
   async disburseFunds(
     disbursementData: DisbursementRequest,
   ): Promise<DisbursementResponse> {
-    this.logger.log('=== STARTING DISBURSEMENT PROCESS ===');
-    this.logger.log(`Disbursement Data: ${JSON.stringify(disbursementData, null, 2)}`);
-    
     const accessToken = await this.getAccessToken();
+
+    // Log the payload being sent to Airtel Money
+    this.logger.log('=== AIRTEL MONEY DISBURSEMENT REQUEST ===');
+    this.logger.log(`Payload: ${JSON.stringify(disbursementData, null, 2)}`);
+    this.logger.log(`Country: ${this.configService.get<string>('AIRTEL_COUNTRY') ?? 'KE'}`);
+    this.logger.log(`Currency: ${this.configService.get<string>('AIRTEL_CURRENCY') ?? 'KES'}`);
+    this.logger.log('==========================================');
 
     try {
       const response = await firstValueFrom(
         this.httpService.post<DisbursementResponse>(
-          `${this.configService.get('AIRTEL_API_BASE_URL')}/standard/v2/disbursements/`,
+          `${this.configService.get<string>('AIRTEL_API_BASE_URL')}/standard/v2/disbursements/`,
           disbursementData,
           {
             headers: {
               Accept: '*/*',
               Authorization: `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
-              'X-Country': this.configService.get('AIRTEL_COUNTRY'),
-              'X-Currency': this.configService.get('AIRTEL_CURRENCY'),
+              'X-Country': this.configService.get<string>('AIRTEL_COUNTRY') ?? 'KE',
+              'X-Currency': this.configService.get<string>('AIRTEL_CURRENCY') ?? 'KES',
             },
           },
         ),
@@ -138,18 +143,14 @@ export class AirtelMoneyService {
 
       // Log the complete Airtel Money disbursement response
       this.logger.log('=== AIRTEL MONEY DISBURSEMENT RESPONSE ===');
-      this.logger.log(`Transaction ID: ${disbursementData.transaction.id}`);
       this.logger.log(`Full Response: ${JSON.stringify(response.data, null, 2)}`);
       this.logger.log('==========================================');
 
-      this.logger.log(
-        `Disbursement successful: ${response.data.status.message}`,
-      );
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         'Disbursement failed:',
-        error.response?.data || error.message,
+        JSON.stringify(error?.response?.data ?? error?.message),
       );
       throw new Error('Failed to disburse funds via Airtel Money');
     }
@@ -161,14 +162,14 @@ export class AirtelMoneyService {
     try {
       const response = await firstValueFrom(
         this.httpService.post(
-          `${this.configService.get('AIRTEL_API_BASE_URL')}/merchant/v1/payments/`,
+          `${this.configService.get<string>('AIRTEL_API_BASE_URL')}/merchant/v1/payments/`,
           paymentData,
           {
             headers: {
               'Content-Type': 'application/json',
               Accept: '*/*',
-              'X-Country': this.configService.get('AIRTEL_COUNTRY'),
-              'X-Currency': this.configService.get('AIRTEL_CURRENCY'),
+              'X-Country': this.configService.get<string>('AIRTEL_COUNTRY') ?? 'KE',
+              'X-Currency': this.configService.get<string>('AIRTEL_CURRENCY') ?? 'KES',
               Authorization: `Bearer ${accessToken}`,
             },
           },
@@ -177,18 +178,14 @@ export class AirtelMoneyService {
 
       // Log the complete Airtel Money payment response
       this.logger.log('=== AIRTEL MONEY PAYMENT RESPONSE ===');
-      this.logger.log(`Transaction ID: ${paymentData.transaction.id}`);
       this.logger.log(`Full Response: ${JSON.stringify(response.data, null, 2)}`);
       this.logger.log('=====================================');
 
-      this.logger.log(
-        `Payment collection initiated: ${JSON.stringify(response.data)}`,
-      );
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         'Payment collection failed:',
-        error.response?.data || error.message,
+        JSON.stringify(error?.response?.data ?? error?.message),
       );
       throw new Error('Failed to collect payment via Airtel Money');
     }

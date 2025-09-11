@@ -5,12 +5,6 @@
 2. Ensure the app is running on `http://localhost:3000` or `http://127.0.0.1:3000`
 3. Make sure PostgreSQL is running and tables are created
 
-## Important: Transaction Status Handling
-The system now processes Airtel Money responses immediately:
-- **Success Response (`success: true`, `status: "TS"`)**: Transaction marked as `COMPLETED`, balance updated
-- **Failed Response (`success: false` or `status: "TF"`)**: Transaction marked as `FAILED`, balance unchanged
-- **Processing Response (other statuses)**: Transaction marked as `PROCESSING`, balance unchanged
-
 ## Base URL
 ```
 http://localhost:3000
@@ -137,7 +131,7 @@ Content-Type: application/json
 **URL:** `http://localhost:3000/transactions/deposit/{transactionId}/process`  
 **Example:** `http://localhost:3000/transactions/deposit/DEP_xxxxxxxxxx/process`
 
-**Expected Response (if Airtel Money returns success):**
+**Expected Response:**
 ```json
 {
   "message": "Deposit transaction processed successfully",
@@ -148,16 +142,10 @@ Content-Type: application/json
     "status": "completed",
     "amount": "100.00",
     "currency": "KES",
-    "airtelMoneyId": "disbursement-XFMOJ26M4M-DEP_xxxxxxxxxx",
-    "airtelReferenceId": "10000280410"
+    "airtelTransactionId": "AP_xxxxxxxxxx"
   }
 }
 ```
-
-**Note:** The transaction status will be:
-- `completed` if Airtel Money returns `success: true` and `status: "TS"`
-- `failed` if Airtel Money returns `success: false` or `status: "TF"`
-- `processing` for other status codes
 
 ---
 
