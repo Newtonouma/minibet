@@ -156,8 +156,13 @@ export class AirtelMoneyService {
     }
   }
 
-  async collectPayment(paymentData: PaymentRequest): Promise<any> {
+  async collectPayment(paymentData: PaymentRequest & { callback_url?: string }): Promise<any> {
     const accessToken = await this.getAccessToken();
+
+    // Ensure callback_url is included
+    if (!paymentData.callback_url) {
+      paymentData.callback_url = this.configService.get<string>('CALLBACK_URL');
+    }
 
     try {
       const response = await firstValueFrom(

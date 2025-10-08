@@ -91,7 +91,7 @@ export class TransactionService {
       const normalizedMsisdn = this.normalizeKenyaMsisdn(transaction.msisdn);
       this.logger.log(`Original MSISDN: ${transaction.msisdn}, Normalized: ${normalizedMsisdn}`);
 
-      // Collect payment via Airtel Money
+      // Collect payment via Airtel Money and rely on callback to finalize
       const paymentResult = await this.airtelMoneyService.collectPayment({
         reference: transaction.reference,
         subscriber: {
@@ -113,54 +113,16 @@ export class TransactionService {
       this.logger.log(`Full Response: ${JSON.stringify(paymentResult, null, 2)}`);
       this.logger.log('================================================');
 
-      // Store the normalized MSISDN for future reference
+      // Store the normalized MSISDN for future reference and mark as processing
       transaction.msisdn = normalizedMsisdn;
+      transaction.status = TransactionStatus.PROCESSING;
 
-      // Update transaction with response data
-      // Use fallback values if the API doesn't provide them
-      transaction.airtelMoneyId = paymentResult.data?.transaction?.airtel_money_id || 
-                                  paymentResult.data?.transaction?.id || 
-                                  `AM_${transaction.transactionId}`;
-      transaction.airtelReferenceId = paymentResult.data?.transaction?.reference_id || 
-                                      transaction.reference;
+      // Save any identifiers Airtel returned so we can correlate on callback
+      transaction.airtelMoneyId = paymentResult.data?.transaction?.airtel_money_id || paymentResult.data?.transaction?.id || `AM_${transaction.transactionId}`;
+      transaction.airtelReferenceId = paymentResult.data?.transaction?.reference_id || transaction.reference;
 
-      // Determine transaction status based on response
-      const airtelStatus = paymentResult.data?.transaction?.status;
-      const isSuccess = paymentResult.status?.success;
-
-      this.logger.log(`Airtel Money Payment Status: ${airtelStatus}, Success: ${isSuccess}`);
-
-      if (isSuccess && (airtelStatus === 'TS' || airtelStatus === 'SUCCESS')) {
-        // Payment successful
-        transaction.status = TransactionStatus.COMPLETED;
-        
-        // Add amount to user balance only if payment is successful
-        transaction.user.balance = Number(transaction.user.balance) + Number(transaction.amount);
-        await this.userRepository.save(transaction.user);
-        
-        this.logger.log(`Deposit successful for transaction: ${transaction.transactionId}`);
-        this.logger.log(`Amount ${transaction.amount} ${transaction.currency} added to user balance`);
-        this.logger.log(`New user balance: ${transaction.user.balance}`);
-      } else if (airtelStatus === 'TF' || airtelStatus === 'FAILED' || isSuccess === false) {
-        // Payment failed
-        transaction.status = TransactionStatus.FAILED;
-        this.logger.error(`Deposit failed for transaction: ${transaction.transactionId}`);
-        this.logger.error(`Airtel Money Status: ${airtelStatus}`);
-        this.logger.error(`Response Message: ${paymentResult.status?.message}`);
-      } else {
-        // For any other status, mark as completed if success is true
-        if (isSuccess) {
-          transaction.status = TransactionStatus.COMPLETED;
-          transaction.user.balance = Number(transaction.user.balance) + Number(transaction.amount);
-          await this.userRepository.save(transaction.user);
-          this.logger.log(`Deposit completed (alternative status) for transaction: ${transaction.transactionId}`);
-        } else {
-          // Payment in progress or unknown status
-          transaction.status = TransactionStatus.PROCESSING;
-          this.logger.log(`Deposit processing for transaction: ${transaction.transactionId}`);
-          this.logger.log(`Airtel Money Status: ${airtelStatus}`);
-        }
-      }
+      // Persist changes and wait for callback to finalize (callback will update status and user balance)
+      await this.transactionRepository.save(transaction);
 
       // Log what we're about to save to the database
       this.logger.log('=== SAVING DEPOSIT TRANSACTION TO DATABASE ===');
@@ -179,6 +141,71 @@ export class TransactionService {
       await this.transactionRepository.save(transaction);
       throw error;
     }
+  }
+
+  /**
+   * Handle Airtel callback payload and update transaction + user balance accordingly.
+   * Expected payload shape: { data: { transaction: { id, reference_id, airtel_money_id, status, amount } }, status: { success, message } }
+   */
+  async handleAirtelCallback(payload: any): Promise<void> {
+    this.logger.log('Handling Airtel callback');
+
+    const txData = payload?.data?.transaction;
+    const statusObj = payload?.status;
+
+    // Try to find transaction by Airtel transaction id, reference_id or internal id
+    const airtelId = txData?.airtel_money_id || txData?.id;
+    const referenceId = txData?.reference_id || txData?.reference;
+    const internalId = txData?.id;
+
+    let transaction: Transaction | null = null;
+
+    if (airtelId) {
+      transaction = await this.transactionRepository.findOne({ where: { airtelMoneyId: airtelId }, relations: ['user'] });
+    }
+
+    if (!transaction && referenceId) {
+      transaction = await this.transactionRepository.findOne({ where: { airtelReferenceId: referenceId }, relations: ['user'] });
+    }
+
+    if (!transaction && internalId) {
+      transaction = await this.transactionRepository.findOne({ where: { transactionId: internalId }, relations: ['user'] });
+    }
+
+    if (!transaction) {
+      this.logger.warn('Airtel callback received for unknown transaction', JSON.stringify({ airtelId, referenceId, internalId }));
+      return;
+    }
+
+    // Map Airtel status to internal status
+    const airtelStatusRaw = txData?.status || statusObj?.message;
+    const successFlag = statusObj?.success;
+
+    if (successFlag || (typeof airtelStatusRaw === 'string' && airtelStatusRaw.toLowerCase().includes('success'))) {
+      // Mark completed and update balance if not already completed
+      if (transaction.status !== TransactionStatus.COMPLETED) {
+        transaction.status = TransactionStatus.COMPLETED;
+        transaction.airtelMoneyId = airtelId || transaction.airtelMoneyId;
+        transaction.airtelReferenceId = referenceId || transaction.airtelReferenceId;
+        await this.userRepository.createQueryBuilder()
+          .update()
+          .set({ balance: () => `balance + ${transaction.amount}` })
+          .where('id = :id', { id: transaction.userId })
+          .execute();
+        // reload user balance for logs
+        const updatedUser = await this.userRepository.findOne({ where: { id: transaction.userId } });
+        this.logger.log(`User ${transaction.userId} balance updated to ${updatedUser?.balance}`);
+      }
+    } else {
+      // Mark failed
+      transaction.status = TransactionStatus.FAILED;
+      transaction.airtelMoneyId = airtelId || transaction.airtelMoneyId;
+      transaction.airtelReferenceId = referenceId || transaction.airtelReferenceId;
+    }
+
+    transaction.updatedAt = new Date();
+    await this.transactionRepository.save(transaction);
+    this.logger.log(`Transaction ${transaction.transactionId} updated from Airtel callback to status ${transaction.status}`);
   }
 
   async processWithdrawal(transactionId: string): Promise<Transaction> {
