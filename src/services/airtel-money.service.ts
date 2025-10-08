@@ -165,6 +165,8 @@ export class AirtelMoneyService {
     }
 
     try {
+      // Log the exact request payload we'll send to Airtel
+      this.logger.log('Airtel Payment Request Payload: ' + JSON.stringify(paymentData, null, 2));
       const response = await firstValueFrom(
         this.httpService.post(
           `${this.configService.get<string>('AIRTEL_API_BASE_URL')}/merchant/v1/payments/`,

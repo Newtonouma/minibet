@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
 import { TransactionModule } from './modules/transaction.module';
+import { AirtelModule } from './modules/airtel.module';
 
 @Module({
   imports: [
@@ -29,7 +30,8 @@ import { TransactionModule } from './modules/transaction.module';
       inject: [ConfigService],
     }),
     UsersModule,
-    TransactionModule,
+  TransactionModule,
+  AirtelModule,
   ],
   controllers: [AppController],
   providers: [AppService],
